@@ -183,14 +183,16 @@ info "Bind mounting /dev/pts on $ROOTFS/dev/pts"
 mount -o bind /dev/pts $ROOTFS/dev/pts
 cleanup_push "info 'Unmounting /dev/pts from $ROOTFS/dev/pts'; retry 'umount $ROOTFS/dev/pts'"
 
-for SCRIPT in $(ls -v1 "$SCRIPTS_DIR" | grep \\.sh$); do
-    SCRIPT="$SCRIPTS_DIR/$SCRIPT"
+VM_BOOTSTRAP=$ROOTFS/boot/efi/vm-bootstrap.sh
 
-    if test -f "$SCRIPT" -a -x "$SCRIPT" -a -r "$SCRIPT"; then
-        cp $SCRIPT $ROOTFS/script
-        cleanup_push "rm $ROOTFS/script"
+for SCRIPT_DIR in $(ls -v1 "$SCRIPTS_DIR"); do
+    SETUP="$SCRIPTS_DIR/$SCRIPT_DIR/setup.sh"
 
-        info "Executing $SCRIPT on $ROOTFS"
+    if test -f "$SETUP" -a -x "$SETUP" -a -r "$SETUP"; then
+        cp "$SETUP" $ROOTFS/setup
+        cleanup_push "rm $ROOTFS/setup"
+
+        info "Executing $SETUP on $ROOTFS"
         SUITE=$SUITE \
             MIRROR=$MIRROR \
             ARCH=$ARCH \
@@ -199,9 +201,16 @@ for SCRIPT in $(ls -v1 "$SCRIPTS_DIR" | grep \\.sh$); do
             VHDD_LOOP=$VHDD_LOOP \
             EFI_PART=$EFI_PART \
             ROOT_PART=$ROOT_PART \
-            chroot $ROOTFS /script
+            chroot $ROOTFS /setup
 
         eval "$(cleanup_peek)"; cleanup_pop # current script
+    fi
+
+    BOOTSTRAP="$SCRIPTS_DIR/$SCRIPT_DIR/bootstrap.sh"
+
+    if test -f "$BOOTSTRAP" -a -x "$BOOTSTRAP" -a -r "$BOOTSTRAP"; then
+        info "Appending $BOOTSTRAP to $VM_BOOTSTRAP"
+        cat "$BOOTSTRAP" >>$VM_BOOTSTRAP
     fi
 done
 

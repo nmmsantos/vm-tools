@@ -69,7 +69,6 @@ CONFIG = config(
     cwd = {cwd}
     root = ${{cwd}}/root
     qemu_img_path = ${{cwd}}/qemu-img
-    bootstrap_script = ${{cwd}}/vm-bootstrap.sh
     """.format(
         cwd=dirname(realpath(__file__)),
         mac="02:00:00:{:02X}:{:02X}:{:02X}".format(randint(0, 255), randint(0, 255), randint(0, 255)),
@@ -114,7 +113,6 @@ DEBUG = CONFIG.getboolean("App", "debug")
 CWD = CONFIG.get("App", "cwd")
 ROOT = CONFIG.get("App", "root")
 QEMU_IMG_PATH = CONFIG.get("App", "qemu_img_path")
-BOOTSTRAP_SCRIPT = CONFIG.get("App", "bootstrap_script")
 
 LOGGER = getLogger(__name__)
 basicConfig(level=INFO if DEBUG else WARNING, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -223,9 +221,20 @@ makedirs(ROOT, exist_ok=True)
 
 run(["mount_msdosfs", PARTITION, ROOT], check=True)
 
-Path("{}/vm-bootstrap.sh".format(ROOT)).write_text(
-    Path(BOOTSTRAP_SCRIPT)
-    .read_text()
+Path("{}/vm-bootstrap.env".format(ROOT)).write_text(
+    dedent(
+        """
+        IP={ip}
+        NETMASK={netmask}
+        GATEWAY={gateway}
+        DOMAIN={domain}
+        DNS={dns}
+        HOSTNAME={hostname}
+        SSH_KEY="{ssh_key}"
+        SALT_MASTER_IP={salt_master_ip}
+        MINION_ID={minion_id}
+        """
+    )
     .format(
         ip=IP,
         netmask=NETMASK,
@@ -237,6 +246,7 @@ Path("{}/vm-bootstrap.sh".format(ROOT)).write_text(
         salt_master_ip=SALT_MASTER_IP,
         minion_id=MINION_ID,
     )
+    .lstrip()
 )
 
 run(["umount", ROOT], check=True)
