@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.8
+#!/usr/bin/env python3
 
 from configparser import ConfigParser, ExtendedInterpolation
 from json import dumps, load
