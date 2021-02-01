@@ -10,4 +10,4 @@ exec ../easy-qemu-system-x86_64.py \
     {net,192.168.5.1/24} \
     {serial} \
     {monitor} \
-    {video,vga}
+    {video,qxl}
