@@ -3,7 +3,7 @@
 : ${SSH_KEY=}
 
 # generate ssh host keys
-dpkg-reconfigure openssh-server
+ssh-keygen -A
 
 if test -z "$SSH_KEY"; then
     exit 0

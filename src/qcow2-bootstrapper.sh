@@ -184,6 +184,7 @@ mount -o bind /dev/pts $ROOTFS/dev/pts
 cleanup_push "info 'Unmounting /dev/pts from $ROOTFS/dev/pts'; retry 'umount $ROOTFS/dev/pts'"
 
 VM_BOOTSTRAP=$ROOTFS/boot/efi/vm-bootstrap.sh
+>$VM_BOOTSTRAP
 
 for SCRIPT_DIR in $(ls -v1 "$SCRIPTS_DIR"); do
     SETUP="$SCRIPTS_DIR/$SCRIPT_DIR/setup.sh"

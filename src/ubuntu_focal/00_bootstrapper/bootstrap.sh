@@ -1,12 +1,13 @@
 #!/bin/sh
 
+set -x
+
 export DEBIAN_FRONTEND=noninteractive
 
-ENV=/boot/efi/vm-bootstrap.env
+ENV="$(dirname "$(readlink -f "$0")")/vm-bootstrap.env"
 
-if test -f $ENV -a -r $ENV; then
-    . $ENV
-    rm $ENV
+if test -f "$ENV" -a -r "$ENV"; then
+    . "$ENV"
 fi
 
 unset ENV
