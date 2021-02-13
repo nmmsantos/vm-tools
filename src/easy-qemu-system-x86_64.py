@@ -3,7 +3,6 @@
 import hashlib
 import logging
 import os
-import random
 import re
 import shutil
 import subprocess
@@ -33,12 +32,18 @@ def idgen(seed):
     return hashlib.sha256(seed.encode()).hexdigest()[:8]
 
 
+def macgen(seed):
+    id = idgen(seed)
+    return "02:00:" + ":".join([id[i : i + 2] for i in range(0, len(id), 2)])
+
+
 def macro_br(cidr, env=None):
     if "networks" not in env:
         env["networks"] = {}
 
     br = "br-" + idgen(cidr)
-    env["networks"][br] = cidr
+    mac = macgen(cidr)
+    env["networks"][br] = cidr, mac
     return (br,)
 
 
@@ -83,10 +88,23 @@ def macro_defaults(env=None):
     )
 
 
-def macro_hdd(file, env=None):
+def macro_hdd(file, size_gb=None, snap=None, env=None):
+    if "hdds" not in env:
+        env["hdds"] = {}
+
+    size_gb = 20 if size_gb is None else int(size_gb)
+
+    if snap == "snap":
+        snap, ext = os.path.splitext(file)
+        snap += "-{}{}".format(idgen(file + env["id"]), ext)
+    else:
+        snap = False
+
+    env["hdds"][file] = (size_gb, snap)
+
     return (
         "-blockdev",
-        "qcow2,node-name={{id,block}},file.driver=file,file.filename={}".format(file),
+        "qcow2,node-name={{id,block}},file.driver=file,file.filename={}".format(snap if snap else file),
         "-device",
         "virtio-blk-pci,drive={id,block,1},{id,bootindex=,1}",
     )
@@ -101,11 +119,12 @@ def macro_id(name, inc=None, init=None, env=None):
 
 
 def macro_mac(env=None):
-    if "macgen" not in env:
-        env["macgen"] = random.Random(env["id"])
+    if "macs" not in env:
+        env["macs"] = {}
 
-    macgen = env["macgen"]
-    return ("02:00:00:{:02X}:{:02X}:{:02X}".format(macgen.randint(0, 255), macgen.randint(0, 255), macgen.randint(0, 255)),)
+    mac = macgen(env["id"] + str(len(env["macs"])))
+    env["macs"][mac] = ()
+    return (mac,)
 
 
 def macro_monitor(env=None):
@@ -115,21 +134,20 @@ def macro_monitor(env=None):
     env["monitor"] = True
     monitor = "{}/monitor.sock".format(env["runtime"])
     LOG.info("You can connect to the qemu monitor using: minicom -D unix#%s", monitor)
-    return (
-        "-chardev",
-        "socket,id={{id,char}},path={},server,nowait".format(monitor),
-        "-mon",
-        "chardev={id,char,1}",
-    )
+    return ("-chardev", "socket,id={{id,char}},path={},server,nowait".format(monitor), "-mon", "chardev={id,char,1}")
 
 
 def macro_net(cidr, env=None):
-    return (
-        "-netdev",
-        "bridge,id={{id,net}},br={{br,{}}}".format(cidr),
-        "-device",
-        "virtio-net-pci,netdev={id,net,1},mac={mac}",
-    )
+    if "taps" not in env:
+        env["taps"] = {}
+
+    (br,) = macro_br(cidr, env)
+    seed = env["id"] + br + str(len(env["taps"]))
+    tap = "tap-" + idgen(seed)
+    mac = macgen(seed)
+    ifup = "/dev/shm/{}.sh".format(tap)
+    env["taps"][tap] = br, mac, ifup
+    return ("-netdev", "tap,id={{id,net}},ifname={},script={}".format(tap, ifup), "-device", "virtio-net-pci,netdev={id,net,1},mac={mac}")
 
 
 def macro_runtime(env=True):
@@ -151,16 +169,6 @@ def macro_serial(env=None):
         "-device",
         "isa-serial,chardev={id,char,1}",
     )
-
-
-def macro_snap(hdd, env=None):
-    if "snapshots" not in env:
-        env["snapshots"] = {}
-
-    snapshot, ext = os.path.splitext(hdd)
-    snapshot += "-{}{}".format(idgen(hdd + env["id"]), ext)
-    env["snapshots"][hdd] = snapshot
-    return (snapshot,)
 
 
 def macro_video(driver=None, env=None):
@@ -232,7 +240,9 @@ def prepare(env):
         with open("/proc/self/net/route", "r") as route_fd:
             gw = next(line[0] for line in map(str.split, iter(route_fd.readline, "")) if line[1] == "00000000")
 
-        for br, cidr in env["networks"].items():
+        for br, net in env["networks"].items():
+            cidr, mac = net
+
             try:
                 exec(["brctl", "addbr", br], capture_output=True)
             except subprocess.CalledProcessError as exc:
@@ -244,15 +254,37 @@ def prepare(env):
                 raise
 
             exec(["ip", "addr", "add", cidr, "dev", br])
-            exec(["ip", "link", "set", br, "up"])
+            exec(["ip", "link", "set", br, "up", "address", mac])
             exec(["iptables", "-t", "nat", "-A", "POSTROUTING", "-s", cidr, "-o", gw, "-j", "MASQUERADE"])
             exec(["iptables", "-A", "FORWARD", "-i", br, "-j", "ACCEPT"])
             exec(["iptables", "-A", "FORWARD", "-i", gw, "-o", br, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
 
-    if "snapshots" in env:
-        for hdd, snapshot in env["snapshots"].items():
-            if not os.path.exists(snapshot):
-                exec(["qemu-img", "create", "-f", "qcow2", "-b", hdd, "-F", "qcow2", snapshot])
+    if "taps" in env:
+        with open("/etc/qemu-ifup", "r") as ifup_fd:
+            ifup_orig = ifup_fd.read()
+
+        switch_matcher = re.compile(r"^switch=.*?\n\n", re.M | re.S)
+
+        for _, tap in env["taps"].items():
+            br, mac, ifup = tap
+            script = switch_matcher.sub(
+                "switch={}\n\n".format(br), ifup_orig.replace('ip link set "$1" up', 'ip link set "$1" up address {}'.format(mac))
+            )
+
+            with open(ifup, "w") as ifup_fd:
+                ifup_fd.write(script)
+
+            os.chmod(ifup, 0o700)
+
+    if "hdds" in env:
+        for file, hdd in env["hdds"].items():
+            size_gb, snap = hdd
+
+            if not os.path.exists(file):
+                exec(["qemu-img", "create", "-f", "qcow2", file, str(size_gb) + "G"])
+
+            if snap and not os.path.exists(snap):
+                exec(["qemu-img", "create", "-f", "qcow2", "-b", file, "-F", "qcow2", snap])
 
 
 def process_arg0(env, arg):
@@ -332,7 +364,6 @@ def qemu_command(args):
             "runtime": macro_runtime,
             "id": macro_id,
             "br": macro_br,
-            "snap": macro_snap,
             "hdd": macro_hdd,
             "mac": macro_mac,
             "net": macro_net,
