@@ -237,8 +237,8 @@ def prepare(env):
     os.makedirs(env["runtime"], exist_ok=True)
 
     if "networks" in env:
-        with open("/proc/self/net/route", "r") as route_fd:
-            gw = next(line[0] for line in map(str.split, iter(route_fd.readline, "")) if line[1] == "00000000")
+        with open("/proc/net/route", "r") as route_fd:
+            gw = next(line[0] for line in map(str.split, iter(route_fd.readline, "")) if line[1] == "00000000" and line[7] == "00000000")
 
         for br, net in env["networks"].items():
             cidr, mac = net

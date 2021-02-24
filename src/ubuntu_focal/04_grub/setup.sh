@@ -27,5 +27,3 @@ sed -Ei \
 update-grub
 grub-install --removable $VHDD_LOOP
 grub-install --removable --recheck $VHDD_LOOP
-
-# apt-get -y install qemu-guest-agent

@@ -1,10 +1,10 @@
 #!/bin/sh
 
-: ${IP=192.168.1.2}
+: ${IP=192.168.5.2}
 : ${NETMASK=24}
-: ${GATEWAY=192.168.1.1}
+: ${GATEWAY=192.168.5.1}
 : ${DOMAIN=example.com}
-: ${DNS=192.168.1.1}
+: ${DNS=192.168.5.1}
 : ${HOSTNAME=ubuntu}
 
 # static hostname
