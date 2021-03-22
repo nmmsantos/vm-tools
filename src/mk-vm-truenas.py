@@ -8,7 +8,7 @@ from os.path import dirname, realpath
 from pathlib import Path
 from random import randint
 from shutil import which
-from subprocess import DEVNULL, CalledProcessError, run
+from subprocess import DEVNULL, CalledProcessError, run  # nosec
 from sys import exit as sys_exit
 from sys import stderr
 from tempfile import NamedTemporaryFile
@@ -20,10 +20,10 @@ from urllib.request import Request, urlopen
 def config(default):
     parser = ConfigParser(interpolation=ExtendedInterpolation())
 
-    with NamedTemporaryFile(mode="w+", prefix="truenas-vm-", suffix=".ini") as config_file:
+    with NamedTemporaryFile(mode="w+", prefix="mk-vm-truenas-", suffix=".ini") as config_file:
         config_file.write(dedent(default).strip())
         config_file.flush()
-        run(["nano", config_file.name], check=True)
+        run(["nano", config_file.name], check=True)  # nosec
         parser.read(config_file.name)
 
     return parser
@@ -48,7 +48,7 @@ CONFIG = config(
     gateway = 10.0.0.1
     domain = juenuno.com
     dns = 10.0.0.2
-    minion_id = ${{hostname}}
+    salt_minion_id = ${{hostname}}
     salt_master_ip = 10.0.0.62
     autostart = yes
     # Options for bootloader: UEFI | UEFI_CSM
@@ -71,7 +71,7 @@ CONFIG = config(
     qemu_img_path = ${{cwd}}/qemu-img
     """.format(
         cwd=dirname(realpath(__file__)),
-        mac="02:00:00:{:02X}:{:02X}:{:02X}".format(randint(0, 255), randint(0, 255), randint(0, 255)),
+        mac="02:00:00:{:02X}:{:02X}:{:02X}".format(randint(0, 255), randint(0, 255), randint(0, 255)),  # nosec
         ssh_key="".join(
             [
                 "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDT2l7FkBAZeZHDhB7AwT+Vx6pKjIVBe2fgaMb6x3yoi2iwRsxygnDnkX5CrVsSE8jhUqoZ8k75U4TJyKNim",
@@ -99,7 +99,7 @@ NETMASK = CONFIG.getint("VM", "netmask")
 GATEWAY = CONFIG.get("VM", "gateway")
 DOMAIN = CONFIG.get("VM", "domain")
 DNS = CONFIG.get("VM", "dns")
-MINION_ID = CONFIG.get("VM", "minion_id")
+SALT_MINION_ID = CONFIG.get("VM", "salt_minion_id")
 SALT_MASTER_IP = CONFIG.get("VM", "salt_master_ip")
 AUTOSTART = CONFIG.getboolean("VM", "autostart")
 BOOTLOADER = CONFIG.get("VM", "bootloader")
@@ -135,7 +135,7 @@ def request(method, path, body=None):
     req = Request(url, data=data, headers=headers, method=method)
 
     try:
-        rsp = urlopen(req)
+        rsp = urlopen(req)  # nosec
     except HTTPError as err:
         LOGGER.warning("%s %s", err.code, err.reason)
         raise
@@ -232,7 +232,7 @@ Path("{}/vm-bootstrap.env".format(ROOT)).write_text(
         HOSTNAME={hostname}
         SSH_KEY="{ssh_key}"
         SALT_MASTER_IP={salt_master_ip}
-        MINION_ID={minion_id}
+        SALT_MINION_ID={salt_minion_id}
         """
     )
     .format(
@@ -244,7 +244,7 @@ Path("{}/vm-bootstrap.env".format(ROOT)).write_text(
         hostname=HOSTNAME,
         ssh_key=SSH_KEY,
         salt_master_ip=SALT_MASTER_IP,
-        minion_id=MINION_ID,
+        salt_minion_id=SALT_MINION_ID,
     )
     .lstrip()
 )
