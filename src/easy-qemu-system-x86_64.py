@@ -32,6 +32,13 @@ def idgen(seed):
     return hashlib.sha256(seed.encode()).hexdigest()[:8]
 
 
+def log_hint(*args, env=None, **kwargs):
+    if "hints" not in env:
+        env["hints"] = []
+
+    env["hints"].append((args, kwargs))
+
+
 def macgen(seed):
     id = idgen(seed)
     return "02:00:" + ":".join([id[i : i + 2] for i in range(0, len(id), 2)])
@@ -133,21 +140,26 @@ def macro_monitor(env=None):
 
     env["monitor"] = True
     monitor = "{}/monitor.sock".format(env["runtime"])
-    LOG.info("You can connect to the qemu monitor using: minicom -D unix#%s", monitor)
+    log_hint("You can connect to the qemu monitor using: minicom -D unix#%s", monitor, env=env)
     return ("-chardev", "socket,id={{id,char}},path={},server,nowait".format(monitor), "-mon", "chardev={id,char,1}")
 
 
-def macro_net(cidr, env=None):
+def macro_net(br, env=None):
     if "taps" not in env:
         env["taps"] = {}
 
-    (br,) = macro_br(cidr, env)
     seed = env["id"] + br + str(len(env["taps"]))
     tap = "tap-" + idgen(seed)
     mac = macgen(seed)
-    ifup = "/dev/shm/{}.sh".format(tap)
-    env["taps"][tap] = br, mac, ifup
-    return ("-netdev", "tap,id={{id,net}},ifname={},script={}".format(tap, ifup), "-device", "virtio-net-pci,netdev={id,net,1},mac={mac}")
+    ifup = "/dev/shm/{}-up.sh".format(tap)
+    ifdown = "/dev/shm/{}-down.sh".format(tap)
+    env["taps"][tap] = br, mac, ifup, ifdown
+    return (
+        "-netdev",
+        "tap,id={{id,net}},ifname={},script={},downscript={}".format(tap, ifup, ifdown),
+        "-device",
+        "virtio-net-pci,netdev={id,net,1},mac={mac}",
+    )
 
 
 def macro_runtime(env=True):
@@ -161,7 +173,7 @@ def macro_serial(env=None):
         env["serials"] += 1
 
     serial = "{}/serial-{}.sock".format(env["runtime"], env["serials"])
-    LOG.info("You can connect to the serial port %d using: minicom -D unix#%s", env["serials"], serial)
+    log_hint("You can connect to the serial port %d using: minicom -D unix#%s", env["serials"], serial, env=env)
 
     return (
         "-chardev",
@@ -196,10 +208,11 @@ def macro_video(driver=None, env=None):
             args.extend(["-device", "virtio-gpu-pci"])
         else:
             display = "{}/display.sock".format(env["runtime"])
-            LOG.info(
+            log_hint(
                 "You can connect to the display using: spicy --uri=spice+unix://%s --title=%s\nUse Shift+F12 to exit fullscreen",
                 display,
                 env["name"],
+                env=env,
             )
             args.extend(
                 [
@@ -256,25 +269,50 @@ def prepare(env):
             exec(["ip", "addr", "add", cidr, "dev", br])
             exec(["ip", "link", "set", br, "up", "address", mac])
             exec(["iptables", "-t", "nat", "-A", "POSTROUTING", "-s", cidr, "-o", gw, "-j", "MASQUERADE"])
+            exec(["iptables", "-A", "FORWARD", "-o", br, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
+            # exec(["iptables", "-A", "FORWARD", "-i", gw, "-o", br, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
             exec(["iptables", "-A", "FORWARD", "-i", br, "-j", "ACCEPT"])
-            exec(["iptables", "-A", "FORWARD", "-i", gw, "-o", br, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"])
 
     if "taps" in env:
         with open("/etc/qemu-ifup", "r") as ifup_fd:
             ifup_orig = ifup_fd.read()
 
+        with open("/etc/qemu-ifdown", "r") as ifdown_fd:
+            ifdown_orig = ifdown_fd.read()
+
         switch_matcher = re.compile(r"^switch=.*?\n\n", re.M | re.S)
 
-        for _, tap in env["taps"].items():
-            br, mac, ifup = tap
-            script = switch_matcher.sub(
-                "switch={}\n\n".format(br), ifup_orig.replace('ip link set "$1" up', 'ip link set "$1" up address {}'.format(mac))
+        for tap, tap_info in env["taps"].items():
+            br, mac, ifup, ifdown = tap_info
+            script = ifup_orig.replace('ip link set "$1" up', 'ip link set "$1" up address {}'.format(mac))
+            script = switch_matcher.sub("switch={}\n\n".format(br), script)
+            script = script.replace(
+                "        exit	# exit with status of the previous command",
+                "".join(
+                    [
+                        "        iptables -A FORWARD -i {0} -o {0} -m physdev --physdev-out {1} -j ACCEPT",
+                        "\n        iptables -A FORWARD -i {0} -o {0} -m physdev --physdev-in {1} -j ACCEPT",
+                        "\n        exit",
+                    ]
+                ).format(br, tap),
             )
 
             with open(ifup, "w") as ifup_fd:
                 ifup_fd.write(script)
 
+            with open(ifdown, "w") as ifdown_fd:
+                ifdown_fd.write(
+                    "".join(
+                        [
+                            ifdown_orig,
+                            "iptables -D FORWARD -i {0} -o {0} -m physdev --physdev-out {1} -j ACCEPT\n",
+                            "iptables -D FORWARD -i {0} -o {0} -m physdev --physdev-in {1} -j ACCEPT\n",
+                        ]
+                    ).format(br, tap)
+                )
+
             os.chmod(ifup, 0o700)
+            os.chmod(ifdown, 0o700)
 
     if "hdds" in env:
         for file, hdd in env["hdds"].items():
@@ -379,6 +417,12 @@ def qemu_command(args):
     process_args(args, env)
     prepare(env)
     LOG.info("QEMU command: %s", "".join((" \\\n  " if a.startswith("-") else " ") + a for a in args).strip())
+
+    if "hints" in env:
+        for hint in env["hints"]:
+            log_args, log_kwargs = hint
+            LOG.info(*log_args, **log_kwargs)
+
     os.execl(*args)
 
 
